@@ -1,0 +1,117 @@
+#https://teichae.tistory.com/entry/Docker-Compose%EB%A5%BC-%EC%9D%B4%EC%9A%A9%ED%95%98%EC%97%AC-ELK-Stack-%EC%8B%9C%EC%9E%91%ED%95%98%EA%B8%B0-1
+# C:\project\docker-elk\docker-compose.yml
+version: '2'
+
+services:
+  crawling:
+    build:
+      context: .
+      dockerfile: ./docker/crawling/Dockerfile
+    container_name: crawling
+    restart: always
+    environment:
+      - TZ=Asia/Seoul
+      - PYTHONUNBUFFERED=1
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_PORT=9200
+      - MYSQL_HOST=db
+    command: /bin/sh -c "chmod +x /usr/local/bin/entrypoint.sh && entrypoint.sh"
+    volumes:
+      - ./:/code/
+      - ./docker/crawling/entrypoint.sh:/usr/local/bin/entrypoint.sh #실행 될 쉘 경로
+      - ./docker/crawling/cron_config:/etc/cron.d/cron_config #cron 설정 파일 경로
+    depends_on:
+      - elasticsearch
+      - db
+    links:
+      - elasticsearch
+      - db
+    networks:
+      - elk
+    tty: true
+    
+  elasticsearch:
+    container_name: elasticsearch
+    build:
+      context: elasticsearch/
+      args:
+        ELK_VERSION: $ELK_VERSION
+    volumes:
+      - ./elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./docker/elasticsearch/userdict_ko.txt:/usr/share/elasticsearch/config/userdict_ko.txt #단어 분류를 위한 유저 사전 추가
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      ES_JAVA_OPTS: "-Xmx1G -Xms1G"
+      #ELASTIC_PASSWORD: changeme
+    networks:
+      - elk
+
+  kibana:
+    container_name: kibana
+    build:
+      context: kibana/
+      args:
+        ELK_VERSION: $ELK_VERSION
+    volumes:
+      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./docker/elasticsearch/userdict_ko.txt:/usr/share/elasticsearch/config/userdict_ko.txt #단어 분류를 위한 유저 사전 추가
+    ports:
+      - "5601:5601"
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  db:
+    image: mysql:5.7.26
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=logstash_db
+      - MYSQL_USER=user
+      - TZ=Asia/Seoul
+    volumes:
+      - ./docker/mysql-db:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --character-set-client-handshake=FALSE
+    ports:
+      - 3306:3306
+    expose:
+      - '3306'
+    networks:
+      - elk
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.3.2
+    container_name: logstash
+    command: /bin/sh -c "touch /usr/share/last_run_metadata/jdbc-int-sql_last_value.yml && bin/logstash"
+    volumes:
+      - ./docker/logstash/last_run_metadata/:/usr/share/last_run_metadata/ #jdbc 로그 저장 경로
+      - ./docker/logstash/pipeline/:/usr/share/logstash/pipeline/
+      - ./docker/logstash/driver/mysql-connector-java-5.1.48-bin.jar:/usr/share/logstash/logstash-core/lib/jars/mysql-connector-java-5.1.48-bin.jar
+      - ./docker/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml #logstash 설정
+      - ./docker/logstash/config/piplines.yml:/usr/share/logstash/config/piplines.yml #piplines 설정
+    environment:
+      - LOGSTASH_JDBC_DRIVER_JAR_LOCATION=/usr/share/logstash/logstash-core/lib/jars/mysql-connector-java-5.1.48-bin.jar
+      - LOGSTASH_JDBC_DRIVER=com.mysql.jdbc.Driver
+      - LOGSTASH_JDBC_URL=jdbc:mysql://db:3306/logstash_db?serverTimezone=Asia/Seoul&useUnicode=true&characterEncoding=utf8
+      - LOGSTASH_JDBC_USERNAME=root
+      - LOGSTASH_JDBC_PASSWORD=root
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - TZ=Asia/Seoul
+      - MYSQL_HOST=db
+    ports:
+    - 10080:10080
+    networks:
+      - elk    
+    depends_on:
+    - elasticsearch
+    - db
+
+
+
+networks:
+
+  elk:
+    driver: bridge
